@@ -2,6 +2,8 @@
 //! (`org.freedesktop.appearance` `color-scheme`). winit reports no theme on Wayland unless the
 //! app set one, so hosts ask here before falling back to dark. A worker thread reads the setting
 //! once and follows `SettingChanged`; a change asks every window to redraw, which rereads it.
+//! The same first read takes GNOME's window button layout, for a client frame's caption
+//! buttons (`titlebar::linux`).
 
 use futures_util::StreamExt;
 use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicU8, Ordering}, mpsc}, time::Duration};
@@ -13,6 +15,8 @@ const PATH: &str = "/org/freedesktop/portal/desktop";
 const INTERFACE: &str = "org.freedesktop.portal.Settings";
 const NAMESPACE: &str = "org.freedesktop.appearance";
 const KEY: &str = "color-scheme";
+const WM_NAMESPACE: &str = "org.gnome.desktop.wm.preferences";
+const BUTTON_LAYOUT: &str = "button-layout";
 /// How long the first window waits for the portal's first answer, as sctk-adwaita does for its
 /// frame; a slower answer redraws the windows when it arrives.
 const FIRST_ANSWER: Duration = Duration::from_millis(100);
@@ -23,12 +27,20 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 static SCHEME: AtomicU8 = AtomicU8::new(0);
 static WATCH: OnceLock<()> = OnceLock::new();
 static WINDOWS: Mutex<Vec<Weak<Window>>> = Mutex::new(Vec::new());
+static LAYOUT: OnceLock<String> = OnceLock::new();
 
 /// Some(true) when the desktop prefers dark, Some(false) light, None when it has no preference
 /// or no portal answers.
 pub(crate) fn dark() -> Option<bool> {
     WATCH.get_or_init(start);
     scheme_dark(SCHEME.load(Ordering::Relaxed).into())
+}
+
+/// GNOME's `button-layout` (`appmenu:close`), when the portal has one. Read once: a change
+/// shows in windows opened after it.
+pub(crate) fn button_layout() -> Option<String> {
+    WATCH.get_or_init(start);
+    LAYOUT.get().cloned()
 }
 
 /// Redraws `window` whenever the preference changes; its redraw rereads [`dark`].
@@ -51,6 +63,15 @@ fn scheme(value: &Variant<'_>) -> Option<u32> {
     match value {
         Variant::U32(x) => Some(*x),
         Variant::Variant(inner) => scheme(inner),
+        _ => None,
+    }
+}
+
+/// A string setting, unwrapped as [`scheme`] unwraps its number.
+fn string(value: &Variant<'_>) -> Option<String> {
+    match value {
+        Variant::Str(s) => Some(s.to_string()),
+        Variant::Variant(inner) => string(inner),
         _ => None,
     }
 }
@@ -79,11 +100,12 @@ async fn watch(ready: mpsc::SyncSender<()>) {
         let portal = Proxy::new(&conn, DEST, PATH, INTERFACE).await.ok()?;
         // Subscribe first, so a change between the read and the subscription isn't lost.
         let changes = portal.receive_signal("SettingChanged").await.ok()?;
-        let value = match portal.call::<_, _, OwnedVariant>("ReadOne", &(NAMESPACE, KEY)).await {
+        let read = async |namespace: &str, key: &str| match portal.call::<_, _, OwnedVariant>("ReadOne", &(namespace, key)).await {
             Ok(v) => Some(v),
-            Err(_) => portal.call::<_, _, OwnedVariant>("Read", &(NAMESPACE, KEY)).await.ok(),
+            Err(_) => portal.call::<_, _, OwnedVariant>("Read", &(namespace, key)).await.ok(),
         };
-        if let Some(v) = value { store(&v); }
+        if let Some(v) = read(NAMESPACE, KEY).await { store(&v); }
+        if let Some(layout) = read(WM_NAMESPACE, BUTTON_LAYOUT).await.as_deref().and_then(string) { let _ = LAYOUT.set(layout); }
         Some((conn, changes))
     }).await.ok().flatten();
     let _ = ready.send(());

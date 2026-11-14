@@ -10,6 +10,8 @@
 use crate::Chrome;
 
 mod caption;
+#[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+pub(crate) mod linux;
 
 pub(crate) use caption::{BUTTONS_KEY, FRAME_KEY, frame};
 
@@ -23,6 +25,11 @@ pub(crate) use caption::{BUTTONS_KEY, FRAME_KEY, frame};
 ///   layouts flyout over maximize (Windows 11), the window menu (Alt+Space, or a right-click on
 ///   a `.window_drag()` region) and its animations; Rune draws the three caption buttons over
 ///   the trailing edge at the band's height, as Electron's `titleBarOverlay` does.
+/// - **Linux on Wayland, where the compositor draws no frame (GNOME):** no title bar either.
+///   Rune draws the caption buttons the desktop's button layout names (`appmenu:close`, GNOME's
+///   default, is close alone), at the edge it names, and the window resizes from a band just
+///   inside its edges. A compositor that frames windows itself (KDE, Hyprland, Sway) keeps its
+///   frame, as X11 does, and [`ChromeInsets`] is zero there.
 /// - **Elsewhere:** the native frame stays and [`ChromeInsets`] is zero.
 ///
 /// `Cx::titlebar_height` changes the height while the app runs, as a UI zoom does, and
@@ -94,16 +101,17 @@ impl TitlebarSet {
 pub struct ChromeInsets {
     /// From the window's left edge to the end of the controls there: the macOS traffic lights
     /// (`Cx::titlebar_inset`), or the Windows caption buttons when the app's language reads right
-    /// to left (`labels::set_direction`), where the traffic lights move to the right instead. 0 in full
-    /// screen and elsewhere.
+    /// to left (`labels::set_direction`), where the traffic lights move to the right instead, or a
+    /// Linux client frame's buttons when the desktop puts them on the left. 0 in full screen and
+    /// elsewhere.
     pub leading: f32,
     /// From the window's right edge to the start of the controls there: the Windows caption
-    /// buttons, unless they're mirrored to the left, or the macOS traffic lights in a right-to-left
-    /// app. 0 in full screen and elsewhere.
+    /// buttons, unless they're mirrored to the left, a Linux client frame's buttons, or the macOS
+    /// traffic lights in a right-to-left app. 0 in full screen and elsewhere.
     pub trailing: f32,
     /// The titlebar's height as the window draws it: [`Titlebar::height`] where Rune replaced
-    /// the native titlebar, 0 where the native frame stays (no `App::titlebar`, Linux, a
-    /// borderless window).
+    /// the native titlebar, 0 where the native frame stays (no `App::titlebar`, X11 or a Wayland
+    /// compositor that frames windows itself, a borderless window).
     pub height: f32,
 }
 
@@ -166,21 +174,22 @@ pub(crate) struct Caption {
     /// window's top-left, Close first, as Windows mirrors a right-to-left window's caption and
     /// Chrome and Edge draw theirs in Arabic or Hebrew.
     pub mirrored: bool,
+    /// A Linux client frame's buttons, as the desktop lays them out (`linux::ButtonLayout`), in
+    /// its own look; `None` is the Windows caption.
+    pub layout: Option<linux::ButtonLayout>,
 }
 
 impl Caption {
     pub(crate) fn new(height: f32) -> Self {
-        Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: crate::labels::rtl() }
+        Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: crate::labels::rtl(), layout: None }
     }
 
     /// The buttons drawn, left to right. A window that can neither minimize nor maximize shows
-    /// only Close, as Windows draws its native caption.
-    pub(crate) fn buttons(&self) -> &'static [CaptionButton] {
-        match (self.hidden, self.minimizable || self.maximizable) {
-            (true, _) => &[],
-            (false, true) => &CaptionButton::ALL,
-            (false, false) => &[CaptionButton::Close],
-        }
+    /// only Close, as Windows draws its native caption. A Linux layout shows the ones it names.
+    pub(crate) fn buttons(&self) -> Vec<CaptionButton> {
+        if self.hidden { return Vec::new(); }
+        if let Some(layout) = self.layout { return layout.buttons.into_iter().flatten().collect(); }
+        if self.minimizable || self.maximizable { CaptionButton::ALL.to_vec() } else { vec![CaptionButton::Close] }
     }
 
     /// Whether `button` does anything: a press on a dimmed button doesn't.
@@ -197,10 +206,10 @@ impl Caption {
     /// edge, or the left one mirrored (Close leftmost).
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn rects(&self, width: f32, scale: f32) -> impl Iterator<Item = (CaptionButton, [f32; 4])> + use<> {
-        let (w, h) = caption::size(self.height, scale);
+        let (w, h) = caption::size(self, scale);
         let buttons = self.buttons();
         let (n, mirrored) = (buttons.len(), self.mirrored);
-        buttons.iter().enumerate().map(move |(i, &b)| (b, [if mirrored { w * (n - 1 - i) as f32 } else { width - w * (n - i) as f32 }, 0.0, w, h]))
+        buttons.into_iter().enumerate().map(move |(i, b)| (b, [if mirrored { w * (n - 1 - i) as f32 } else { width - w * (n - i) as f32 }, 0.0, w, h]))
     }
 
     /// The enabled button at (x, y), in points from the window's top-left, in a window `width`
@@ -215,6 +224,6 @@ impl Caption {
 
     /// Points the buttons take from their edge at `scale`: the right, or the left mirrored.
     pub(crate) fn width(&self, scale: f32) -> f32 {
-        caption::size(self.height, scale).0 * self.buttons().len() as f32
+        caption::size(self, scale).0 * self.buttons().len() as f32
     }
 }

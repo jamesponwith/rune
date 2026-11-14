@@ -67,6 +67,11 @@ mod tests;
 #[derive(Default)]
 pub(super) struct Native {
     pub(super) activator: Option<crate::platform::activation::Activator>,
+    /// The caption buttons of the frame Rune draws for `App::titlebar` where the Wayland
+    /// compositor draws none (`titlebar::linux`); `None` keeps the native frame.
+    pub(super) frame: Option<crate::titlebar::linux::ButtonLayout>,
+    /// The frame's resize edge under the pointer.
+    pub(super) edge: Option<winit::window::ResizeDirection>,
 }
 
 #[cfg(target_os = "windows")]

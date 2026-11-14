@@ -1,6 +1,6 @@
-//! The window's controls over the app's titlebar: the macOS traffic lights and the Windows
-//! custom frame (`App::titlebar`), and what they take of it (`Cx::titlebar_inset`,
-//! `Cx::chrome_insets`, the caption buttons drawn over the view).
+//! The window's controls over the app's titlebar: the macOS traffic lights, the Windows custom
+//! frame and the Linux client frame (`App::titlebar`), and what they take of it
+//! (`Cx::titlebar_inset`, `Cx::chrome_insets`, the caption buttons drawn over the view).
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 use super::*;
@@ -59,13 +59,14 @@ fn lights_right(w: &Win) -> bool {
 }
 
 /// Whether Rune replaced the native title bar: macOS draws the app's titlebar under its
-/// transparent one; Windows has the custom frame.
+/// transparent one; Windows has the custom frame, and Linux its own where the compositor draws
+/// none.
 fn custom_frame(w: &Win) -> bool {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     return w.native.frame.is_some();
     #[cfg(target_os = "macos")]
     { let _ = w; true }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     { let _ = w; false }
 }
 
@@ -76,7 +77,17 @@ fn caption(w: &Win, height: Option<f32>) -> Option<crate::titlebar::Caption> {
         if let Some(h) = height { f.set_height(h); }
         f.caption(&w.window)
     });
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    return w.native.frame.zip(height).map(|(layout, height)| crate::titlebar::Caption {
+        height,
+        maximized: w.window.is_maximized(),
+        maximizable: w.window.is_resizable(),
+        hidden: w.window.fullscreen().is_some(),
+        mirrored: layout.leading,
+        layout: Some(layout),
+        ..crate::titlebar::Caption::new(height)
+    });
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     { let _ = (w, height); None }
 }
 

@@ -36,6 +36,12 @@ impl<S: 'static> Host<S> {
             if open_as.full_screens() { attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
         }
         let chrome = frame_chrome(self.chrome, self.titlebar, self.rt.titlebar_set());
+        // Before it maps, so winit never draws its own bar.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let frame = (self.titlebar.is_some() && !self.options.borderless && is_wayland(event_loop)
+            && !crate::titlebar::linux::server_decorates(event_loop)).then(crate::titlebar::linux::ButtonLayout::desktop);
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if frame.is_some() { attrs = attrs.with_decorations(false); }
         #[cfg(target_os = "macos")]
         if !self.options.borderless && chrome.full_size_content {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -238,7 +244,9 @@ impl<S: 'static> Host<S> {
         let native = {
             Native { cloak, frame, a11y_start, ..Default::default() }
         };
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let native = Native { frame, ..Default::default() };
+        #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
         let native = Native::default();
         self.win = Some(Win {
             a11y,

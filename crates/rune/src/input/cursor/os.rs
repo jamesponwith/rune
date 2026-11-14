@@ -30,6 +30,8 @@ pub(crate) const REASSERT: Duration = Duration::from_millis(50);
 
 pub(crate) struct OsCursor {
     applied: (bool, Cursor),
+    /// A shape the host set over the view's (`set_override`), until the next `apply`.
+    overridden: Option<CursorIcon>,
     /// The scale an image cursor was last made at: a window moving to a display with another
     /// scale makes it again.
     scale: f32,
@@ -37,7 +39,15 @@ pub(crate) struct OsCursor {
 
 impl OsCursor {
     pub(crate) fn new() -> Self {
-        OsCursor { applied: (false, Cursor::Default), scale: 0.0 }
+        OsCursor { applied: (false, Cursor::Default), overridden: None, scale: 0.0 }
+    }
+
+    /// Shows `icon` whatever the view asks for, as a Linux client frame's resize edge does.
+    pub(crate) fn set_override(&mut self, window: &Window, icon: CursorIcon) {
+        if self.overridden.replace(icon) == Some(icon) { return; }
+        window.set_cursor(icon);
+        // The next `apply` sets the view's cursor again.
+        self.applied = (false, Cursor::Default);
     }
 
     /// Applies `want` while the host is `active` (the pointer is over its window or its hit
@@ -45,6 +55,7 @@ impl OsCursor {
     /// (Win32 `SetCursor`), so an inactive host must leave the cursor to whichever window has
     /// the pointer.
     pub(crate) fn apply(&mut self, window: &Arc<Window>, want: Cursor, active: bool) {
+        self.overridden = None;
         let scale = image_scale(window);
         let rescaled = active && os_image(want).is_some() && std::mem::replace(&mut self.scale, scale) != scale;
         let Some(next) = next(&mut self.applied, want, active).or(rescaled.then_some(want)) else {

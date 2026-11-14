@@ -1,6 +1,7 @@
 //! The Windows caption buttons as elements, drawn as Electron's `titleBarOverlay` draws them
 //! (Chromium's Windows 11 icon painter): a 10 px symbol with a stroke of one device pixel,
-//! hover and press washes of the symbol colour, and a red close button.
+//! hover and press washes of the symbol colour, and a red close button. A Linux client frame's
+//! (`Caption::layout`) are GNOME's: the same symbols on round washes of the symbol colour.
 
 use std::rc::Rc;
 
@@ -20,10 +21,20 @@ const CLOSE_PRESSED_ALPHA: f32 = 0x98 as f32 / 255.0;
 /// disabled text.
 const DISABLED_ALPHA: f32 = 0x5C as f32 / 255.0;
 
+/// A Linux button's width in points: GNOME's 24-point circle and the room around it.
+const LINUX_WIDTH: f32 = 34.0;
+/// A Linux button's circle, in points.
+const LINUX_CIRCLE: f32 = 24.0;
+/// The circle's wash at rest and under the pointer, as fractions of the symbol colour's alpha:
+/// libadwaita's window controls.
+const LINUX_ALPHA: f32 = 0.1;
+const LINUX_HOVER_ALPHA: f32 = 0.15;
+
 /// A button's width and height in points at `scale`, each a whole number of pixels.
-pub(super) fn size(height: f32, scale: f32) -> (f32, f32) {
+pub(super) fn size(caption: &Caption, scale: f32) -> (f32, f32) {
     let snap = |pt: f32| (pt * scale).round().max(1.0) / scale;
-    (snap(Titlebar::CAPTION_BUTTON_WIDTH), snap(height))
+    let width = if caption.layout.is_some() { LINUX_WIDTH } else { Titlebar::CAPTION_BUTTON_WIDTH };
+    (snap(width), snap(caption.height))
 }
 
 /// The view's root under the caption buttons, in a frame of Rune's own the window's size: the
@@ -48,11 +59,11 @@ pub(crate) const BUTTONS_KEY: &str = "rune-caption";
 fn buttons(caption: &Caption, symbol: Color, scale: f32, zoom: f32) -> El {
     // Sized in window points at the window's scale, then drawn in the view's points.
     let window = scale / zoom;
-    let (w, h) = size(caption.height, window);
+    let (w, h) = size(caption, window);
     let (w, h) = (w / zoom, h / zoom);
     // Mirrored, the row sits at the top-left with Close first (`Caption::rects`).
     let (left, right) = if caption.mirrored { (Some(0.0), None) } else { (None, Some(0.0)) };
-    let buttons: Vec<El> = caption.buttons().iter().map(|&button| caption_button(caption, button, symbol, (w, h), (scale, window))).collect();
+    let buttons: Vec<El> = caption.buttons().into_iter().map(|button| caption_button(caption, button, symbol, (w, h), (scale, window))).collect();
     let buttons = if caption.mirrored { buttons.into_iter().rev().collect() } else { buttons };
     row().key(BUTTONS_KEY).dir(crate::Direction::Ltr).pin(left, Some(0.0), right, None).children(buttons)
 }
@@ -78,8 +89,16 @@ fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h
         CaptionButton::Maximize => ("rune-caption-maximize", "Maximize"),
         CaptionButton::Close => ("rune-caption-close", "Close"),
     };
-    let mut e = el().key(key).role("button").label(label).focusable(false).disabled(!enabled).size(w, h).fill(fill)
-        .child(symbol_el(button, caption.maximized, ink, (w, h), scales));
+    let mut e = el().key(key).role("button").label(label).focusable(false).disabled(!enabled).size(w, h);
+    e = if caption.layout.is_some() {
+        // Hover is the element's own: the pointer reaches these buttons as any other element.
+        let d = (LINUX_CIRCLE * scales.1).round() / scales.0;
+        let circle = el().size(d, d).radius(d / 2.0).fill(symbol.alpha(symbol.a * LINUX_ALPHA));
+        let circle = if enabled { circle.hover(symbol.alpha(symbol.a * LINUX_HOVER_ALPHA)) } else { circle };
+        e.items_center().justify_center().child(circle.child(symbol_el(button, caption.maximized, ink, (d, d), scales)))
+    } else {
+        e.fill(fill).child(symbol_el(button, caption.maximized, ink, (w, h), scales))
+    };
     // The mouse presses them through the window procedure; assistive technology invokes these.
     // A dimmed button has nothing to invoke.
     if enabled {

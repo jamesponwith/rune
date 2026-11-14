@@ -56,7 +56,25 @@ impl Win {
     /// The runtime's cursor while the pointer is in the window, the arrow once it leaves.
     /// `Hidden` needs focus, so it can't outlive the window being active.
     pub(super) fn apply_cursor<S>(&mut self, rt: &Runtime<S>, focused: bool) {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(edge) = self.native.edge {
+            self.cursor.set_override(&self.window, crate::titlebar::linux::edge_cursor(edge));
+            return;
+        }
         let want = match rt.cursor() { crate::el::Cursor::Hidden if !focused => crate::el::Cursor::Default, c => c };
         self.cursor.apply(&self.window, want, rt.pointer().is_some());
+    }
+
+    /// Follows the pointer (`None` once it leaves) over a client frame's resize edges, and
+    /// returns whether it moved onto or off one: `apply_cursor` then shows the resize cursor, or
+    /// the view's again. A maximized, full-screen or fixed-size window has no edges.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(super) fn track_edge(&mut self, at: Option<winit::dpi::PhysicalPosition<f64>>) -> bool {
+        let w = &self.window;
+        let resizes = self.native.frame.is_some() && w.is_resizable() && !w.is_maximized() && w.fullscreen().is_none();
+        let scale = w.scale_factor();
+        let size = w.inner_size().to_logical::<f64>(scale);
+        let edge = at.filter(|_| resizes).and_then(|p| crate::titlebar::linux::edge_at((p.x / scale, p.y / scale), (size.width, size.height)));
+        std::mem::replace(&mut self.native.edge, edge) != edge
     }
 }

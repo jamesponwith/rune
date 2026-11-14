@@ -488,7 +488,11 @@ impl<S: 'static> Host<S> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                let edge_moved = l.track_edge(Some(position));
                 rt.pointer_move(position.x as f32 / rt.input_scale(), position.y as f32 / rt.input_scale());
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if edge_moved { l.apply_cursor(rt, l.window.has_focus()); }
                 // AppKit needs the drag session started inside this mouse-dragged event.
                 if let Some(start) = rt.take_drag_out() {
                     let image = self.gpu.as_ref().filter(|_| start.item.drag_image().is_none()).and_then(|(gpu, renderer)|
@@ -504,12 +508,19 @@ impl<S: 'static> Host<S> {
                 l.request_redraw();
             }
             WindowEvent::CursorLeft { .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                l.track_edge(None);
                 rt.pointer_leave();
                 l.request_redraw();
             }
             WindowEvent::Touch(touch) => {
                 crate::window::touch(rt, &touch);
                 l.request_redraw();
+            }
+            // A press on a client frame's edge resizes the window, and the view never sees it.
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if l.native.edge.is_some() => {
+                if let Some(edge) = l.native.edge { let _ = l.window.drag_resize_window(edge); }
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 if state == ElementState::Pressed {
