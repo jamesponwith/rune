@@ -75,6 +75,10 @@ pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec
             let range = CFRange { location: 0, length: text.length() };
             let font = CTFont::for_string_with_language(&base, &text, range, language.as_deref());
             let family = font.family_name().to_string();
+            // No installed font has it: CoreText answers with LastResort, which has a box for
+            // every character. As a symbol face it would draw those boxes ahead of the faces
+            // that load later (STIX Two Math's ⏵), for the rest of the run.
+            if family == ".LastResort" { continue; }
             // PingFang (CoreText's Chinese fallback) draws with `hvgl` outlines, which no
             // outline reader here can draw: Chinese takes Hiragino Sans GB, or Heiti TC for
             // Traditional, as fontique does.
@@ -121,5 +125,20 @@ fn public_family(font: &CTFont) -> Option<String> {
             let name = d.attribute(kCTFontFamilyNameAttribute)?.downcast::<CFString>().ok()?.to_string();
             (!name.starts_with('.')).then_some(name)
         })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::fallback_family_files;
+
+    #[test]
+    fn a_char_no_font_has_adds_nothing() {
+        // Unassigned, and a noncharacter: only LastResort covers them.
+        assert_eq!(fallback_family_files(&['\u{0378}', '\u{FFFF}'], None), Vec::<std::path::PathBuf>::new());
+    }
+
+    #[test]
+    fn a_symbol_still_adds_its_font() {
+        assert!(!fallback_family_files(&['\u{23F5}'], None).is_empty());
     }
 }
